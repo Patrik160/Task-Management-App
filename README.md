@@ -54,4 +54,4 @@ The application utilizes a rigorous 8-pillar security strategy implemented via *
 
 ## 📄 License
 
-Distributed under the MIT License. See `LICENSE` for more information.
+Distributed under the GPL License. See `LICENSE` for more information.
