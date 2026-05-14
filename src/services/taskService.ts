@@ -9,8 +9,7 @@ import {
   where, 
   orderBy,
   serverTimestamp,
-  Timestamp,
-  type DocumentData
+  Timestamp
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 
