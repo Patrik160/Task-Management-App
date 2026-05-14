@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations ---
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email']) &&
+             data.keys().size() <= 10 &&
+             data.uid is string && data.uid.size() <= 128 &&
+             data.email is string && data.email.size() <= 256;
+    }
+
+    function isValidBoard(data) {
+      return data.keys().hasAll(['name', 'ownerId']) &&
+             data.keys().size() <= 10 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.ownerId == request.auth.uid;
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['title', 'status', 'boardId', 'creatorId']) &&
+             data.keys().size() <= 15 &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+             data.status in ['todo', 'in-progress', 'done'] &&
+             data.creatorId == request.auth.uid;
+    }
+
+    // --- Collections ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid; // Secure query enforcement
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'lastSeen']);
+    }
+
+    match /boards/{boardId} {
+      allow get: if isSignedIn() && (isOwner(resource.data.ownerId) || (request.auth.uid in resource.data.members));
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || (request.auth.uid in resource.data.members));
+      allow create: if isSignedIn() && isValidId(boardId) && isValidBoard(incoming()) && incoming().ownerId == request.auth.uid;
+      allow update: if isSignedIn() && (isOwner(existing().ownerId) || (request.auth.uid in existing().members)) && 
+                    isValidBoard(incoming()) &&
+                    (
+                      // Action: Rename or update board
+                      (isOwner(existing().ownerId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'members', 'updatedAt'])) ||
+                      // Action: Just update updatedAt for some reason
+                      (incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt']))
+                    );
+      allow delete: if isSignedIn() && isOwner(existing().ownerId);
+
+      // Subcollection: Tasks
+      match /tasks/{taskId} {
+        allow get: if isSignedIn() && (get(/databases/$(database)/documents/boards/$(boardId)).data.ownerId == request.auth.uid || (request.auth.uid in get(/databases/$(database)/documents/boards/$(boardId)).data.members));
+        allow list: if isSignedIn() && (get(/databases/$(database)/documents/boards/$(boardId)).data.ownerId == request.auth.uid || (request.auth.uid in get(/databases/$(database)/documents/boards/$(boardId)).data.members));
+        
+        allow create: if isSignedIn() && isValidId(taskId) && isValidTask(incoming()) && 
+                      incoming().boardId == boardId &&
+                      (get(/databases/$(database)/documents/boards/$(boardId)).data.ownerId == request.auth.uid || (request.auth.uid in get(/databases/$(database)/documents/boards/$(boardId)).data.members));
+        
+        allow update: if isSignedIn() && 
+                      (get(/databases/$(database)/documents/boards/$(boardId)).data.ownerId == request.auth.uid || (request.auth.uid in get(/databases/$(database)/documents/boards/$(boardId)).data.members)) &&
+                      isValidTask(incoming()) &&
+                      (
+                        // Action: Update details/status
+                        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'status', 'priority', 'assigneeId', 'order', 'deadline', 'updatedAt'])
+                      );
+        
+        allow delete: if isSignedIn() && 
+                      (get(/databases/$(database)/documents/boards/$(boardId)).data.ownerId == request.auth.uid || (request.auth.uid in get(/databases/$(database)/documents/boards/$(boardId)).data.members));
+      }
+    }
+  }
+}
